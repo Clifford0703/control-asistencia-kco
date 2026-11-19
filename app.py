@@ -9,40 +9,44 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# CSS compacto móvil + barra superior de Streamlit flotante y traslúcida
+# Barra superior 100% transparente y flotante para aprovechar toda la altura en móvil
 st.markdown(
     """
 <style>
-    /* Barra superior de Streamlit flotante y traslúcida */
     header[data-testid="stHeader"] {
-        background-color: rgba(255, 255, 255, 0.45) !important;
-        backdrop-filter: blur(8px) !important;
-        -webkit-backdrop-filter: blur(8px) !important;
-        border-bottom: 1px solid rgba(226, 232, 240, 0.6) !important;
+        background: transparent !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        border: none !important;
+        pointer-events: none;
     }
 
-    /* Margen superior calibrado para que la barra flotante no corte el título */
+    header[data-testid="stHeader"] * {
+        pointer-events: auto;
+    }
+
     .block-container {
-        padding-top: 3.4rem !important;
-        padding-bottom: 1.5rem !important;
+        padding-top: 0.85rem !important;
+        padding-bottom: 1.2rem !important;
         padding-left: 0.8rem !important;
         padding-right: 0.8rem !important;
         max-width: 900px;
     }
 
     .app-title {
-        font-size: 1.35rem;
+        font-size: 1.25rem;
         font-weight: 700;
         color: #0f172a;
         line-height: 1.2;
         margin: 0;
+        padding-right: 110px; /* Evita que el texto toque los iconos de la derecha en pantallas estrechas */
     }
 
     .app-subtitle {
-        font-size: 0.78rem;
+        font-size: 0.75rem;
         color: #64748b;
         margin-top: 2px;
-        margin-bottom: 0.6rem;
+        margin-bottom: 0.55rem;
     }
 
     h3 {
@@ -138,8 +142,8 @@ def find_col(df, candidates):
   return None
 
 
-# Encabezado compacto con firma y botón de actualización
-c_title, c_btn = st.columns([4, 1], vertical_alignment="center")
+# Encabezado arriba del todo, nítido y con botón de refresco
+c_title, c_btn = st.columns([5, 1], vertical_alignment="center")
 with c_title:
   st.markdown(
       """
@@ -163,7 +167,7 @@ if df_col_raw.empty or df_mar_raw.empty:
   st.warning("No hay registros disponibles en las listas.")
   st.stop()
 
-# Mapear dimColaboradores (sin depender de Title)
+# Mapear dimColaboradores
 c_dni = find_col(df_col_raw, ["DNI"])
 c_nom = find_col(df_col_raw, ["NombreCompleto"])
 c_reg = find_col(df_col_raw, ["RegimenLaboral"])
@@ -206,7 +210,7 @@ def short_name(full_name):
 
 df_col["Colaborador"] = df_col["NombreCompleto"].apply(short_name)
 
-# Mapear factMarcaciones (sin depender de Title)
+# Mapear factMarcaciones
 m_dni = find_col(df_mar_raw, ["DNI"])
 m_tipo = find_col(df_mar_raw, ["TipoMarcacion"])
 m_fh = find_col(df_mar_raw, ["FechaHoraMarcacion", "FechaHoraMarcac"])
@@ -232,7 +236,7 @@ dt = pd.to_datetime(df_mar["FechaHora_Raw"], errors="coerce", utc=True)
 df_mar["FechaHora"] = dt.dt.tz_convert("America/Lima").dt.tz_localize(None)
 df_mar = df_mar.dropna(subset=["FechaHora"]).copy()
 
-# Etiqueta semanal compacta (dd/mm - dd/mm/aa)
+# Etiqueta semanal compacta
 df_mar["InicioSemana"] = df_mar["FechaHora"].dt.to_period("W-SUN").dt.start_time
 df_mar["Semana"] = (
     df_mar["InicioSemana"].dt.strftime("%d/%m")
@@ -247,7 +251,7 @@ df_merged["Colaborador"] = df_merged["Colaborador"].fillna(
     "DNI " + df_merged["DNI"]
 )
 
-# Filtros compactos en una sola fila
+# Filtros compactos
 semanas_df = (
     df_merged[["InicioSemana", "Semana"]]
     .drop_duplicates()
@@ -307,7 +311,7 @@ k2.metric(
 )
 k3.metric("Sin salida", int(df_diario["Pend"].sum()) if not df_diario.empty else 0)
 
-# Vista 1: Resumen Semanal Compacto
+# Vista 1: Resumen Semanal
 st.subheader("Resumen Semanal")
 if not df_diario.empty:
   resumen = (
@@ -327,7 +331,7 @@ if not df_diario.empty:
   )
   st.dataframe(resumen, use_container_width=True, hide_index=True)
 
-# Vista 2: Jornadas Diarias Compactas
+# Vista 2: Detalle Diario
 st.subheader("Detalle Diario")
 if not df_diario.empty:
   dias_es = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
