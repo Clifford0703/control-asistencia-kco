@@ -9,7 +9,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Barra superior 100% transparente y flotante para aprovechar toda la altura en móvil
+# Barra superior 100% transparente y flotante + diseño móvil compacto
 st.markdown(
     """
 <style>
@@ -39,14 +39,14 @@ st.markdown(
         color: #0f172a;
         line-height: 1.2;
         margin: 0;
-        padding-right: 110px; /* Evita que el texto toque los iconos de la derecha en pantallas estrechas */
+        padding-right: 110px;
     }
 
     .app-subtitle {
         font-size: 0.75rem;
         color: #64748b;
         margin-top: 2px;
-        margin-bottom: 0.55rem;
+        margin-bottom: 0.65rem;
     }
 
     h3 {
@@ -71,7 +71,7 @@ st.markdown(
     }
 
     .stSelectbox {
-        margin-bottom: -0.5rem;
+        margin-bottom: -0.4rem;
     }
 </style>
 """,
@@ -142,20 +142,14 @@ def find_col(df, candidates):
   return None
 
 
-# Encabezado arriba del todo, nítido y con botón de refresco
-c_title, c_btn = st.columns([5, 1], vertical_alignment="center")
-with c_title:
-  st.markdown(
-      """
-        <div class="app-title">Asistencia Semanal — KCO Group</div>
-        <div class="app-subtitle">Desarrollado por Alfredo Huaracha Mendoza</div>
-        """,
-      unsafe_allow_html=True,
-  )
-with c_btn:
-  if st.button("↻", help="Actualizar datos", use_container_width=True):
-    st.cache_data.clear()
-    st.rerun()
+# Encabezado limpio a todo lo ancho
+st.markdown(
+    """
+    <div class="app-title">Asistencia Semanal — KCO Group</div>
+    <div class="app-subtitle">Desarrollado por Alfredo Huaracha Mendoza</div>
+    """,
+    unsafe_allow_html=True,
+)
 
 try:
   df_col_raw, df_mar_raw = fetch_sharepoint_data()
@@ -251,13 +245,13 @@ df_merged["Colaborador"] = df_merged["Colaborador"].fillna(
     "DNI " + df_merged["DNI"]
 )
 
-# Filtros compactos
+# Fila única de filtros + botón de actualización a la derecha
 semanas_df = (
     df_merged[["InicioSemana", "Semana"]]
     .drop_duplicates()
     .sort_values("InicioSemana", ascending=False)
 )
-f1, f2 = st.columns(2)
+f1, f2, f3 = st.columns([4, 4, 1], vertical_alignment="center")
 with f1:
   semana_sel = st.selectbox(
       "Semana", semanas_df["Semana"].tolist(), label_visibility="collapsed"
@@ -269,6 +263,12 @@ with f2:
   colab_sel = st.selectbox(
       "Colaborador", colabs, label_visibility="collapsed"
   )
+with f3:
+  if st.button(
+      "↻", help="Actualizar datos en vivo", use_container_width=True
+  ):
+    st.cache_data.clear()
+    st.rerun()
 
 df_sem = df_merged[df_merged["Semana"] == semana_sel].copy()
 if colab_sel != "Todos":
