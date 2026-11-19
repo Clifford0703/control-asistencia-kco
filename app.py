@@ -3,11 +3,50 @@ import pandas as pd
 import requests
 import streamlit as st
 
-# Configuración de página (tema claro y ancho completo)
 st.set_page_config(
-    page_title="Control de Asistencia - KCO Group",
+    page_title="Asistencia KCO",
     layout="wide",
     initial_sidebar_state="collapsed",
+)
+
+# CSS compacto orientado a lectura rápida en móvil
+st.markdown(
+    """
+<style>
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 1.5rem;
+        padding-left: 0.8rem;
+        padding-right: 0.8rem;
+        max-width: 900px;
+    }
+    h1 {
+        font-size: 1.35rem !important;
+        margin-bottom: 0.25rem !important;
+    }
+    h3 {
+        font-size: 1.05rem !important;
+        margin-top: 0.75rem !important;
+        margin-bottom: 0.35rem !important;
+    }
+    [data-testid="stMetric"] {
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 8px 10px;
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.75rem !important;
+    }
+    [data-testid="stMetricValue"] {
+        font-size: 1.15rem !important;
+    }
+    .stSelectbox {
+        margin-bottom: -0.5rem;
+    }
+</style>
+""",
+    unsafe_allow_html=True,
 )
 
 # Cargar credenciales desde st.secrets
@@ -19,7 +58,6 @@ SITE_URL = st.secrets["sharepoint"]["site_url"].rstrip("/")
 
 @st.cache_data(ttl=120)
 def fetch_sharepoint_data():
-  # 1. Obtener token con MSAL
   authority = f"https://login.microsoftonline.com/{TENANT_ID}"
   app = msal.ConfidentialClientApplication(
       CLIENT_ID,
@@ -31,7 +69,7 @@ def fetch_sharepoint_data():
   )
   if "access_token" not in token_res:
     raise RuntimeError(
-        f"Error de autenticación Azure: {token_res.get('error_description')}"
+        f"Error de autenticación: {token_res.get('error_description')}"
     )
 
   headers = {
@@ -39,7 +77,6 @@ def fetch_sharepoint_data():
       "Accept": "application/json",
   }
 
-  # 2. Resolver Site ID desde la URL de SharePoint
   clean_url = SITE_URL.replace("https://", "")
   domain = clean_url.split("/")[0]
   path = "/".join(clean_url.split("/")[1:])
@@ -50,7 +87,6 @@ def fetch_sharepoint_data():
   site_resp.raise_for_status()
   site_id = site_resp.json()["id"]
 
-  # 3. Función auxiliar para descargar todos los ítems de una lista (con paginación)
   def get_list_items(list_name):
     url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{list_name}/items?expand=fields&$top=999"
     rows = []
@@ -63,9 +99,7 @@ def fetch_sharepoint_data():
       url = payload.get("@odata.nextLink")
     return pd.DataFrame(rows)
 
-  df_col = get_list_items("dimColaboradores")
-  df_mar = get_list_items("factMarcaciones")
-  return df_col, df_mar
+  return get_list_items("dimColaboradores"), get_list_items("factMarcaciones")
 
 
 def find_col(df, candidates):
@@ -79,28 +113,26 @@ def find_col(df, candidates):
   return None
 
 
-st.title("Control de Asistencia Semanal — KCO Group")
-
-col_btn, col_info = st.columns([1, 5])
-with col_btn:
-  if st.button("Actualizar datos"):
+# Encabezado compacto con botón de refresco
+c_title, c_btn = st.columns([4, 1], vertical_alignment="center")
+with c_title:
+  st.title("Asistencia Semanal — KCO")
+with c_btn:
+  if st.button("↻", help="Actualizar datos", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
 
 try:
   df_col_raw, df_mar_raw = fetch_sharepoint_data()
 except Exception as e:
-  st.error(f"No se pudo conectar con SharePoint: {e}")
+  st.error(f"Error al conectar con SharePoint: {e}")
   st.stop()
 
 if df_col_raw.empty or df_mar_raw.empty:
-  st.warning(
-      "Una de las listas está vacía en SharePoint. Verifica que existan"
-      " registros."
-  )
+  st.warning("No hay registros disponibles en las listas.")
   st.stop()
 
-# Normalizar columnas de dimColaboradores
+# Mapear dimColaboradores (sin depender de Title)
 c_dni = find_col(df_col_raw, ["DNI"])
 c_nom = find_col(df_col_raw, ["NombreCompleto"])
 c_reg = find_col(df_col_raw, ["RegimenLaboral"])
@@ -112,18 +144,19 @@ c_vig = find_col(df_col_raw, ["EsVigente"])
 df_col = df_col_raw[[
     c for c in [c_dni, c_nom, c_reg, c_hrs, c_vig] if c
 ]].copy()
-rename_col = {}
-if c_dni:
-  rename_col[c_dni] = "DNI"
-if c_nom:
-  rename_col[c_nom] = "Colaborador"
-if c_reg:
-  rename_col[c_reg] = "Régimen"
-if c_hrs:
-  rename_col[c_hrs] = "Horas Objetivo"
-if c_vig:
-  rename_col[c_vig] = "EsVigente"
-df_col = df_col.rename(columns=rename_col)
+df_col = df_col.rename(
+    columns={
+        k: v
+        for k, v in {
+            c_dni: "DNI",
+            c_nom: "NombreCompleto",
+            c_reg: "Régimen",
+            c_hrs: "Obj",
+            c_vig: "EsVigente",
+        }.items()
+        if k
+    }
+)
 df_col["DNI"] = df_col["DNI"].astype(str).str.strip()
 
 if "EsVigente" in df_col.columns:
@@ -132,177 +165,160 @@ if "EsVigente" in df_col.columns:
   ]
 df_col = df_col.drop_duplicates(subset=["DNI"])
 
-# Normalizar columnas de factMarcaciones
+
+# Acortar nombre a Primer Nombre + Primer Apellido para evitar scroll horizontal en móvil
+def short_name(full_name):
+  parts = str(full_name).strip().split()
+  if len(parts) >= 3:
+    return f"{parts[0]} {parts[-2]}"
+  return " ".join(parts)
+
+
+df_col["Colaborador"] = df_col["NombreCompleto"].apply(short_name)
+
+# Mapear factMarcaciones (sin depender de Title)
 m_dni = find_col(df_mar_raw, ["DNI"])
 m_tipo = find_col(df_mar_raw, ["TipoMarcacion"])
 m_fh = find_col(df_mar_raw, ["FechaHoraMarcacion", "FechaHoraMarcac"])
 m_obs = find_col(df_mar_raw, ["Observaciones"])
 
 df_mar = df_mar_raw[[c for c in [m_dni, m_tipo, m_fh, m_obs] if c]].copy()
-rename_mar = {}
-if m_dni:
-  rename_mar[m_dni] = "DNI"
-if m_tipo:
-  rename_mar[m_tipo] = "Tipo"
-if m_fh:
-  rename_mar[m_fh] = "FechaHora_Raw"
-if m_obs:
-  rename_mar[m_obs] = "Observaciones"
-df_mar = df_mar.rename(columns=rename_mar)
+df_mar = df_mar.rename(
+    columns={
+        k: v
+        for k, v in {
+            m_dni: "DNI",
+            m_tipo: "Tipo",
+            m_fh: "FechaHora_Raw",
+            m_obs: "Obs",
+        }.items()
+        if k
+    }
+)
 df_mar["DNI"] = df_mar["DNI"].astype(str).str.strip()
 
-# Convertir fecha/hora a zona horaria de Lima
+# Zona horaria Lima
 dt = pd.to_datetime(df_mar["FechaHora_Raw"], errors="coerce", utc=True)
 df_mar["FechaHora"] = dt.dt.tz_convert("America/Lima").dt.tz_localize(None)
 df_mar = df_mar.dropna(subset=["FechaHora"]).copy()
 
-# Calcular inicio de semana (Lunes) y etiqueta semanal
+# Etiqueta semanal compacta (dd/mm - dd/mm)
 df_mar["InicioSemana"] = df_mar["FechaHora"].dt.to_period("W-SUN").dt.start_time
 df_mar["Semana"] = (
-    df_mar["InicioSemana"].dt.strftime("%d/%m/%Y")
-    + " al "
-    + (df_mar["InicioSemana"] + pd.Timedelta(days=6)).dt.strftime("%d/%m/%Y")
+    df_mar["InicioSemana"].dt.strftime("%d/%m")
+    + " - "
+    + (df_mar["InicioSemana"] + pd.Timedelta(days=6)).dt.strftime("%d/%m/%y")
 )
 df_mar["Fecha"] = df_mar["FechaHora"].dt.date
 df_mar["Hora"] = df_mar["FechaHora"].dt.strftime("%H:%M")
 
-# Cruzar marcaciones con colaboradores
 df_merged = df_mar.merge(df_col, on="DNI", how="left")
 df_merged["Colaborador"] = df_merged["Colaborador"].fillna(
     "DNI " + df_merged["DNI"]
 )
 
-# Filtros superiores
+# Filtros compactos en una sola fila
 semanas_df = (
     df_merged[["InicioSemana", "Semana"]]
     .drop_duplicates()
     .sort_values("InicioSemana", ascending=False)
 )
-lista_semanas = semanas_df["Semana"].tolist()
-
-f1, f2 = st.columns([2, 2])
+f1, f2 = st.columns(2)
 with f1:
-  semana_sel = st.selectbox("Seleccionar Semana (Lunes a Domingo)", lista_semanas)
+  semana_sel = st.selectbox(
+      "Semana", semanas_df["Semana"].tolist(), label_visibility="collapsed"
+  )
 with f2:
-  colaboradores_disp = ["Todos"] + sorted(
+  colabs = ["Todos"] + sorted(
       df_col["Colaborador"].dropna().unique().tolist()
   )
-  colab_sel = st.selectbox("Filtrar Colaborador", colaboradores_disp)
+  colab_sel = st.selectbox(
+      "Colaborador", colabs, label_visibility="collapsed"
+  )
 
 df_sem = df_merged[df_merged["Semana"] == semana_sel].copy()
 if colab_sel != "Todos":
   df_sem = df_sem[df_sem["Colaborador"] == colab_sel]
 
-# Calcular horas trabajadas por día (emparejando Ingreso y Salida por DNI y Fecha)
-registros_diarios = []
+# Cálculo diario emparejando Ingreso y Salida
+registros = []
 for (dni, fecha), grupo in df_sem.sort_values("FechaHora").groupby(
     ["DNI", "Fecha"]
 ):
   ingresos = grupo[grupo["Tipo"].str.lower() == "ingreso"]["FechaHora"].tolist()
   salidas = grupo[grupo["Tipo"].str.lower() == "salida"]["FechaHora"].tolist()
 
-  horas_dia = 0.0
-  pares = min(len(ingresos), len(salidas))
-  for i in range(pares):
+  horas = 0.0
+  for i in range(min(len(ingresos), len(salidas))):
     diff = (salidas[i] - ingresos[i]).total_seconds() / 3600.0
     if diff > 0:
-      horas_dia += diff
+      horas += diff
 
-  estado = (
-      "Completo"
-      if len(ingresos) == len(salidas) and len(ingresos) > 0
-      else "Pendiente salida"
-  )
-  registros_diarios.append({
+  incompleto = not (len(ingresos) == len(salidas) and len(ingresos) > 0)
+  registros.append({
       "DNI": dni,
       "Colaborador": grupo["Colaborador"].iloc[0],
-      "Régimen": (
-          grupo["Régimen"].iloc[0] if "Régimen" in grupo.columns else "-"
-      ),
-      "Horas Objetivo": (
-          grupo["Horas Objetivo"].iloc[0]
-          if "Horas Objetivo" in grupo.columns
-          else 0
-      ),
+      "Obj": grupo["Obj"].iloc[0] if "Obj" in grupo.columns else 0,
       "Fecha": fecha,
-      "Primer Ingreso": ingresos[0].strftime("%H:%M") if ingresos else "-",
-      "Última Salida": salidas[-1].strftime("%H:%M") if salidas else "-",
-      "Horas Día": round(horas_dia, 2),
-      "Estado": estado,
+      "In": ingresos[0].strftime("%H:%M") if ingresos else "--:--",
+      "Out": salidas[-1].strftime("%H:%M") if salidas else "--:--",
+      "Hrs": round(horas, 1),
+      "Pend": 1 if incompleto else 0,
   })
 
-df_diario = pd.DataFrame(registros_diarios)
+df_diario = pd.DataFrame(registros)
 
-# KPIs de la semana
+# 3 métricas compactas en línea (sin scroll)
 k1, k2, k3 = st.columns(3)
-k1.metric("Total Marcaciones", len(df_sem))
+k1.metric("Activos", f"{df_sem['DNI'].nunique()}/{len(df_col)}")
 k2.metric(
-    "Colaboradores con Registro",
-    df_sem["DNI"].nunique(),
-    f"de {len(df_col)} vigentes",
+    "Horas",
+    f"{df_diario['Hrs'].sum():.1f}h" if not df_diario.empty else "0.0h",
 )
-k3.metric(
-    "Horas Acumuladas (con salida)",
-    f"{df_diario['Horas Día'].sum():.1f} h" if not df_diario.empty else "0.0 h",
-)
+k3.metric("Sin salida", int(df_diario["Pend"].sum()) if not df_diario.empty else 0)
 
-st.divider()
-
-# 1. Resumen Semanal por Colaborador
-st.subheader("Resumen Semanal por Colaborador")
+# Vista 1: Resumen Semanal Compacto (sin scrollboxes)
+st.subheader("Resumen Semanal")
 if not df_diario.empty:
   resumen = (
-      df_diario.groupby(
-          ["DNI", "Colaborador", "Régimen", "Horas Objetivo"], as_index=False
-      )
+      df_diario.groupby(["Colaborador", "Obj"], as_index=False)
       .agg(
-          Días_Asistidos=("Fecha", "nunique"),
-          Horas_Acumuladas=("Horas Día", "sum"),
-          Marcaciones_Incompletas=(
-              "Estado",
-              lambda s: (s == "Pendiente salida").sum(),
-          ),
+          Días=("Fecha", "nunique"),
+          Hrs=("Hrs", "sum"),
+          Pend=("Pend", "sum"),
       )
-      .rename(
-          columns={
-              "Días_Asistidos": "Días Asistidos",
-              "Horas_Acumuladas": "Horas Acumuladas",
-              "Marcaciones_Incompletas": "Días sin Salida",
-          }
-      )
+      .assign(
+          Avance=lambda d: d["Hrs"].round(1).astype(str)
+          + " / "
+          + d["Obj"].fillna(0).astype(int).astype(str)
+          + "h"
+      )[["Colaborador", "Días", "Avance", "Pend"]]
+      .rename(columns={"Pend": "Sin Sal."})
   )
   st.dataframe(resumen, use_container_width=True, hide_index=True)
 
-# 2. Matriz Diaria de la Semana (Lunes a Domingo)
-st.subheader("Detalle Diario de la Semana")
+# Vista 2: Jornadas Diarias Compactas
+st.subheader("Detalle Diario")
 if not df_diario.empty:
-  df_diario["Día"] = pd.to_datetime(df_diario["Fecha"]).dt.strftime(
-      "%a %d/%m"
-  )
-  df_diario["Resumen Día"] = (
-      df_diario["Primer Ingreso"]
-      + " - "
-      + df_diario["Última Salida"]
-      + " ("
-      + df_diario["Horas Día"].astype(str)
-      + "h)"
-  )
-  matriz = df_diario.pivot_table(
-      index=["Colaborador", "Régimen"],
-      columns="Día",
-      values="Resumen Día",
-      aggfunc="first",
-      fill_value="—",
-  ).reset_index()
-  st.dataframe(matriz, use_container_width=True, hide_index=True)
+  dias_es = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+  dt_f = pd.to_datetime(df_diario["Fecha"])
+  df_diario["Día"] = [
+      f"{dias_es[d.weekday()]} {d.strftime('%d/%m')}" for d in dt_f
+  ]
+  df_diario["Turno"] = df_diario["In"] + "–" + df_diario["Out"]
 
-# 3. Log Crudo de Marcaciones de la Semana
-with st.expander("Ver historial detallado de marcaciones de la semana"):
-  cols_show = ["Fecha", "Hora", "Colaborador", "DNI", "Tipo"]
-  if "Observaciones" in df_sem.columns:
-    cols_show.append("Observaciones")
+  tabla_diaria = df_diario.sort_values(
+      ["Fecha", "Colaborador"], ascending=[False, True]
+  )[["Día", "Colaborador", "Turno", "Hrs"]]
+  st.dataframe(tabla_diaria, use_container_width=True, hide_index=True)
+
+# Log crudo oculto en expander para no alargar la pantalla móvil
+with st.expander("Historial de marcaciones"):
+  cols = ["Fecha", "Hora", "Colaborador", "Tipo"]
+  if "Obs" in df_sem.columns:
+    cols.append("Obs")
   st.dataframe(
-      df_sem.sort_values("FechaHora", ascending=False)[cols_show],
+      df_sem.sort_values("FechaHora", ascending=False)[cols],
       use_container_width=True,
       hide_index=True,
   )
