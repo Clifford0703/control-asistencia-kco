@@ -9,38 +9,63 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# CSS compacto orientado a lectura rápida en móvil
+# CSS compacto móvil + barra superior de Streamlit flotante y traslúcida
 st.markdown(
     """
 <style>
+    /* Barra superior de Streamlit flotante y traslúcida */
+    header[data-testid="stHeader"] {
+        background-color: rgba(255, 255, 255, 0.45) !important;
+        backdrop-filter: blur(8px) !important;
+        -webkit-backdrop-filter: blur(8px) !important;
+        border-bottom: 1px solid rgba(226, 232, 240, 0.6) !important;
+    }
+
+    /* Margen superior calibrado para que la barra flotante no corte el título */
     .block-container {
-        padding-top: 1rem;
-        padding-bottom: 1.5rem;
-        padding-left: 0.8rem;
-        padding-right: 0.8rem;
+        padding-top: 3.4rem !important;
+        padding-bottom: 1.5rem !important;
+        padding-left: 0.8rem !important;
+        padding-right: 0.8rem !important;
         max-width: 900px;
     }
-    h1 {
-        font-size: 1.35rem !important;
-        margin-bottom: 0.25rem !important;
+
+    .app-title {
+        font-size: 1.35rem;
+        font-weight: 700;
+        color: #0f172a;
+        line-height: 1.2;
+        margin: 0;
     }
+
+    .app-subtitle {
+        font-size: 0.78rem;
+        color: #64748b;
+        margin-top: 2px;
+        margin-bottom: 0.6rem;
+    }
+
     h3 {
-        font-size: 1.05rem !important;
+        font-size: 1.02rem !important;
         margin-top: 0.75rem !important;
         margin-bottom: 0.35rem !important;
     }
+
     [data-testid="stMetric"] {
         background-color: #f8fafc;
         border: 1px solid #e2e8f0;
         border-radius: 8px;
         padding: 8px 10px;
     }
+
     [data-testid="stMetricLabel"] {
         font-size: 0.75rem !important;
     }
+
     [data-testid="stMetricValue"] {
         font-size: 1.15rem !important;
     }
+
     .stSelectbox {
         margin-bottom: -0.5rem;
     }
@@ -113,10 +138,16 @@ def find_col(df, candidates):
   return None
 
 
-# Encabezado compacto con botón de refresco
+# Encabezado compacto con firma y botón de actualización
 c_title, c_btn = st.columns([4, 1], vertical_alignment="center")
 with c_title:
-  st.title("Asistencia Semanal — KCO")
+  st.markdown(
+      """
+        <div class="app-title">Asistencia Semanal — KCO Group</div>
+        <div class="app-subtitle">Desarrollado por Alfredo Huaracha Mendoza</div>
+        """,
+      unsafe_allow_html=True,
+  )
 with c_btn:
   if st.button("↻", help="Actualizar datos", use_container_width=True):
     st.cache_data.clear()
@@ -166,7 +197,6 @@ if "EsVigente" in df_col.columns:
 df_col = df_col.drop_duplicates(subset=["DNI"])
 
 
-# Acortar nombre a Primer Nombre + Primer Apellido para evitar scroll horizontal en móvil
 def short_name(full_name):
   parts = str(full_name).strip().split()
   if len(parts) >= 3:
@@ -202,7 +232,7 @@ dt = pd.to_datetime(df_mar["FechaHora_Raw"], errors="coerce", utc=True)
 df_mar["FechaHora"] = dt.dt.tz_convert("America/Lima").dt.tz_localize(None)
 df_mar = df_mar.dropna(subset=["FechaHora"]).copy()
 
-# Etiqueta semanal compacta (dd/mm - dd/mm)
+# Etiqueta semanal compacta (dd/mm - dd/mm/aa)
 df_mar["InicioSemana"] = df_mar["FechaHora"].dt.to_period("W-SUN").dt.start_time
 df_mar["Semana"] = (
     df_mar["InicioSemana"].dt.strftime("%d/%m")
@@ -268,7 +298,7 @@ for (dni, fecha), grupo in df_sem.sort_values("FechaHora").groupby(
 
 df_diario = pd.DataFrame(registros)
 
-# 3 métricas compactas en línea (sin scroll)
+# 3 métricas compactas en línea
 k1, k2, k3 = st.columns(3)
 k1.metric("Activos", f"{df_sem['DNI'].nunique()}/{len(df_col)}")
 k2.metric(
@@ -277,7 +307,7 @@ k2.metric(
 )
 k3.metric("Sin salida", int(df_diario["Pend"].sum()) if not df_diario.empty else 0)
 
-# Vista 1: Resumen Semanal Compacto (sin scrollboxes)
+# Vista 1: Resumen Semanal Compacto
 st.subheader("Resumen Semanal")
 if not df_diario.empty:
   resumen = (
@@ -312,7 +342,7 @@ if not df_diario.empty:
   )[["Día", "Colaborador", "Turno", "Hrs"]]
   st.dataframe(tabla_diaria, use_container_width=True, hide_index=True)
 
-# Log crudo oculto en expander para no alargar la pantalla móvil
+# Log crudo oculto en expander
 with st.expander("Historial de marcaciones"):
   cols = ["Fecha", "Hora", "Colaborador", "Tipo"]
   if "Obs" in df_sem.columns:
