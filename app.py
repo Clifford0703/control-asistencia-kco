@@ -9,7 +9,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Barra superior 100% transparente y flotante + diseño móvil compacto
+# Barra superior 100% transparente y flotante + UI ejecutiva compacta para móvil
 st.markdown(
     """
 <style>
@@ -51,8 +51,9 @@ st.markdown(
 
     h3 {
         font-size: 1.02rem !important;
-        margin-top: 0.75rem !important;
+        margin-top: 0.8rem !important;
         margin-bottom: 0.35rem !important;
+        color: #0f172a;
     }
 
     [data-testid="stMetric"] {
@@ -63,11 +64,13 @@ st.markdown(
     }
 
     [data-testid="stMetricLabel"] {
-        font-size: 0.75rem !important;
+        font-size: 0.74rem !important;
+        color: #475569 !important;
     }
 
     [data-testid="stMetricValue"] {
         font-size: 1.15rem !important;
+        font-weight: 700 !important;
     }
 
     .stSelectbox {
@@ -142,7 +145,7 @@ def find_col(df, candidates):
   return None
 
 
-# Encabezado limpio a todo lo ancho
+# Encabezado ejecutivo
 st.markdown(
     """
     <div class="app-title">Asistencia Semanal — KCO Group</div>
@@ -161,7 +164,7 @@ if df_col_raw.empty or df_mar_raw.empty:
   st.warning("No hay registros disponibles en las listas.")
   st.stop()
 
-# Mapear dimColaboradores
+# 1. Procesar plantilla vigente (dimColaboradores)
 c_dni = find_col(df_col_raw, ["DNI"])
 c_nom = find_col(df_col_raw, ["NombreCompleto"])
 c_reg = find_col(df_col_raw, ["RegimenLaboral"])
@@ -180,23 +183,24 @@ df_col = df_col.rename(
             c_dni: "DNI",
             c_nom: "NombreCompleto",
             c_reg: "Régimen",
-            c_hrs: "Obj",
+            c_hrs: "Meta",
             c_vig: "EsVigente",
         }.items()
         if k
     }
 )
 df_col["DNI"] = df_col["DNI"].astype(str).str.strip()
-if "Obj" in df_col.columns:
-  df_col["Obj"] = pd.to_numeric(df_col["Obj"], errors="coerce").fillna(0)
-else:
-  df_col["Obj"] = 0
+df_col["Meta"] = (
+    pd.to_numeric(df_col["Meta"], errors="coerce").fillna(0.0)
+    if "Meta" in df_col.columns
+    else 0.0
+)
 
 if "EsVigente" in df_col.columns:
   df_col = df_col[
       df_col["EsVigente"].astype(str).str.lower().isin(["si", "sí", "true", "1"])
   ]
-df_col = df_col.drop_duplicates(subset=["DNI"])
+df_col = df_col.drop_duplicates(subset=["DNI"]).copy()
 
 
 def short_name(full_name):
@@ -208,7 +212,7 @@ def short_name(full_name):
 
 df_col["Colaborador"] = df_col["NombreCompleto"].apply(short_name)
 
-# Mapear factMarcaciones
+# 2. Procesar marcaciones (factMarcaciones)
 m_dni = find_col(df_mar_raw, ["DNI"])
 m_tipo = find_col(df_mar_raw, ["TipoMarcacion"])
 m_fh = find_col(df_mar_raw, ["FechaHoraMarcacion", "FechaHoraMarcac"])
@@ -229,12 +233,10 @@ df_mar = df_mar.rename(
 )
 df_mar["DNI"] = df_mar["DNI"].astype(str).str.strip()
 
-# Zona horaria Lima
 dt = pd.to_datetime(df_mar["FechaHora_Raw"], errors="coerce", utc=True)
 df_mar["FechaHora"] = dt.dt.tz_convert("America/Lima").dt.tz_localize(None)
 df_mar = df_mar.dropna(subset=["FechaHora"]).copy()
 
-# Etiqueta semanal compacta
 df_mar["InicioSemana"] = df_mar["FechaHora"].dt.to_period("W-SUN").dt.start_time
 df_mar["Semana"] = (
     df_mar["InicioSemana"].dt.strftime("%d/%m")
@@ -244,15 +246,9 @@ df_mar["Semana"] = (
 df_mar["Fecha"] = df_mar["FechaHora"].dt.date
 df_mar["Hora"] = df_mar["FechaHora"].dt.strftime("%H:%M")
 
-df_merged = df_mar.merge(df_col, on="DNI", how="left")
-df_merged["Colaborador"] = df_merged["Colaborador"].fillna(
-    "DNI " + df_merged["DNI"]
-)
-df_merged["Obj"] = df_merged["Obj"].fillna(0)
-
-# Fila única de filtros + botón de actualización a la derecha
+# Filtros compactos en una fila
 semanas_df = (
-    df_merged[["InicioSemana", "Semana"]]
+    df_mar[["InicioSemana", "Semana"]]
     .drop_duplicates()
     .sort_values("InicioSemana", ascending=False)
 )
@@ -275,13 +271,17 @@ with f3:
     st.cache_data.clear()
     st.rerun()
 
-df_sem = df_merged[df_merged["Semana"] == semana_sel].copy()
-if colab_sel != "Todos":
-  df_sem = df_sem[df_sem["Colaborador"] == colab_sel]
+df_sem_mar = df_mar[df_mar["Semana"] == semana_sel].copy()
+df_plantilla = df_col.copy()
 
-# Cálculo diario emparejando Ingreso y Salida
-registros = []
-for (dni, fecha), grupo in df_sem.sort_values("FechaHora").groupby(
+if colab_sel != "Todos":
+  df_plantilla = df_plantilla[df_plantilla["Colaborador"] == colab_sel]
+  dnis_sel = df_plantilla["DNI"].tolist()
+  df_sem_mar = df_sem_mar[df_sem_mar["DNI"].isin(dnis_sel)]
+
+# 3. Cálculo diario de jornadas (emparejando Ingreso -> Salida)
+registros_diarios = []
+for (dni, fecha), grupo in df_sem_mar.sort_values("FechaHora").groupby(
     ["DNI", "Fecha"]
 ):
   ingresos = grupo[grupo["Tipo"].str.lower() == "ingreso"]["FechaHora"].tolist()
@@ -294,10 +294,8 @@ for (dni, fecha), grupo in df_sem.sort_values("FechaHora").groupby(
       horas += diff
 
   incompleto = not (len(ingresos) == len(salidas) and len(ingresos) > 0)
-  registros.append({
+  registros_diarios.append({
       "DNI": dni,
-      "Colaborador": grupo["Colaborador"].iloc[0],
-      "Obj": float(grupo["Obj"].iloc[0]),
       "Fecha": fecha,
       "In": ingresos[0].strftime("%H:%M") if ingresos else "--:--",
       "Out": salidas[-1].strftime("%H:%M") if salidas else "--:--",
@@ -305,74 +303,103 @@ for (dni, fecha), grupo in df_sem.sort_values("FechaHora").groupby(
       "Pend": 1 if incompleto else 0,
   })
 
-df_diario = pd.DataFrame(registros)
+df_diario = pd.DataFrame(registros_diarios)
 
-# Resumen semanal por colaborador y cálculo de horas extra
+# 4. Consolidar Balance Semanal sobre toda la plantilla vigente
 if not df_diario.empty:
-  resumen_base = df_diario.groupby(["Colaborador", "Obj"], as_index=False).agg(
-      Días=("Fecha", "nunique"),
-      Hrs=("Hrs", "sum"),
-      Pend=("Pend", "sum"),
+  agg_sem = df_diario.groupby("DNI", as_index=False).agg(
+      Trabajadas=("Hrs", "sum"),
+      Sin_Salida=("Pend", "sum"),
   )
-  resumen_base["Extra"] = resumen_base.apply(
-      lambda r: max(0.0, r["Hrs"] - r["Obj"]) if r["Obj"] > 0 else 0.0, axis=1
-  )
-  total_horas = resumen_base["Hrs"].sum()
-  total_extra = resumen_base["Extra"].sum()
-  total_pend = int(resumen_base["Pend"].sum())
+  df_resumen = df_plantilla.merge(agg_sem, on="DNI", how="left")
 else:
-  resumen_base = pd.DataFrame()
-  total_horas = 0.0
-  total_extra = 0.0
-  total_pend = 0
+  df_resumen = df_plantilla.copy()
+  df_resumen["Trabajadas"] = 0.0
+  df_resumen["Sin_Salida"] = 0
 
-# 3 métricas operativas compactas
+df_resumen["Trabajadas"] = df_resumen["Trabajadas"].fillna(0.0).round(1)
+df_resumen["Sin_Salida"] = df_resumen["Sin_Salida"].fillna(0).astype(int)
+df_resumen["Diferencia"] = (df_resumen["Trabajadas"] - df_resumen["Meta"]).round(
+    1
+)
+df_resumen["Extra"] = df_resumen["Diferencia"].apply(lambda x: max(0.0, x))
+df_resumen["Faltante"] = df_resumen["Diferencia"].apply(lambda x: max(0.0, -x))
+
+
+def format_balance(row):
+  diff = row["Diferencia"]
+  alerta = " ⚠️" if row["Sin_Salida"] > 0 else ""
+  if diff > 0:
+    return f"+{diff:.1f}h (Extra){alerta}"
+  elif diff < 0:
+    return f"-{abs(diff):.1f}h (Falta){alerta}"
+  return f"0.0h (OK){alerta}"
+
+
+df_resumen["Balance"] = df_resumen.apply(format_balance, axis=1)
+
+# 5. KPIs Ejecutivos Superiores (Primera Vista)
 k1, k2, k3 = st.columns(3)
-k1.metric("Horas Totales", f"{total_horas:.1f}h")
-k2.metric("Horas Extra", f"{total_extra:.1f}h")
-k3.metric("Sin Salida", total_pend)
+k1.metric("Trabajadas", f"{df_resumen['Trabajadas'].sum():.1f}h")
+k2.metric("Horas Extra", f"+{df_resumen['Extra'].sum():.1f}h")
+k3.metric("Por Completar", f"-{df_resumen['Faltante'].sum():.1f}h")
 
-# Vista 1: Resumen Semanal
-st.subheader("Resumen Semanal")
-if not resumen_base.empty:
-  resumen = resumen_base.assign(
-      Avance=lambda d: d["Hrs"].round(1).astype(str)
-      + "/"
-      + d["Obj"].astype(int).astype(str)
-      + "h",
-      H_Extra=lambda d: d["Extra"].apply(
-          lambda x: f"+{x:.1f}h" if x > 0 else "—"
-      ),
-  )[["Colaborador", "Días", "Avance", "H_Extra", "Pend"]].rename(
-      columns={"H_Extra": "Extra", "Pend": "Sin Sal."}
+# 6. Vista Principal: Control Semanal por Colaborador
+st.subheader("Control Semanal por Colaborador")
+tabla_principal = df_resumen.sort_values("Colaborador")[
+    ["Colaborador", "Trabajadas", "Meta", "Balance"]
+].copy()
+tabla_principal["Trabajadas"] = tabla_principal["Trabajadas"].apply(
+    lambda x: f"{x:.1f}h"
+)
+tabla_principal["Meta"] = tabla_principal["Meta"].apply(
+    lambda x: f"{int(x)}h" if x == int(x) else f"{x:.1f}h"
+)
+
+st.dataframe(tabla_principal, use_container_width=True, hide_index=True)
+
+if df_resumen["Sin_Salida"].sum() > 0:
+  st.caption(
+      "⚠️ Indica jornadas abiertas sin marcación de salida registrada (horas"
+      " parciales)."
   )
-  st.dataframe(resumen, use_container_width=True, hide_index=True)
 
-# Vista 2: Detalle Diario
-st.subheader("Detalle Diario")
-if not df_diario.empty:
-  dias_es = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
-  dt_f = pd.to_datetime(df_diario["Fecha"])
-  df_diario["Día"] = [
-      f"{dias_es[d.weekday()]} {d.strftime('%d/%m')}" for d in dt_f
-  ]
-  df_diario["Turno"] = df_diario["In"] + "–" + df_diario["Out"]
-  df_diario["Hrs_Txt"] = df_diario["Hrs"].round(1).astype(str) + "h"
+# 7. Vistas Secundarias (Detalle Diario y Log Crudo)
+with st.expander("Ver detalle diario de turnos"):
+  if not df_diario.empty:
+    df_diario_view = df_diario.merge(
+        df_col[["DNI", "Colaborador"]], on="DNI", how="left"
+    )
+    dias_es = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+    dt_f = pd.to_datetime(df_diario_view["Fecha"])
+    df_diario_view["Día"] = [
+        f"{dias_es[d.weekday()]} {d.strftime('%d/%m')}" for d in dt_f
+    ]
+    df_diario_view["Turno"] = df_diario_view["In"] + "–" + df_diario_view["Out"]
+    df_diario_view["Hrs"] = df_diario_view["Hrs"].round(1).astype(str) + "h"
 
-  tabla_diaria = df_diario.sort_values(
-      ["Fecha", "Colaborador"], ascending=[False, True]
-  )[["Día", "Colaborador", "Turno", "Hrs_Txt"]].rename(
-      columns={"Hrs_Txt": "Hrs"}
-  )
-  st.dataframe(tabla_diaria, use_container_width=True, hide_index=True)
+    st.dataframe(
+        df_diario_view.sort_values(
+            ["Fecha", "Colaborador"], ascending=[False, True]
+        )[["Día", "Colaborador", "Turno", "Hrs"]],
+        use_container_width=True,
+        hide_index=True,
+    )
+  else:
+    st.info("Sin marcaciones registradas en esta semana.")
 
-# Log crudo oculto en expander
-with st.expander("Historial de marcaciones"):
-  cols = ["Fecha", "Hora", "Colaborador", "Tipo"]
-  if "Obs" in df_sem.columns:
-    cols.append("Obs")
-  st.dataframe(
-      df_sem.sort_values("FechaHora", ascending=False)[cols],
-      use_container_width=True,
-      hide_index=True,
-  )
+with st.expander("Historial crudo de marcaciones"):
+  if not df_sem_mar.empty:
+    df_log = df_sem_mar.merge(
+        df_col[["DNI", "Colaborador"]], on="DNI", how="left"
+    )
+    cols = ["Fecha", "Hora", "Colaborador", "Tipo"]
+    if "Obs" in df_log.columns:
+      cols.append("Obs")
+    st.dataframe(
+        df_log.sort_values("FechaHora", ascending=False)[cols],
+        use_container_width=True,
+        hide_index=True,
+    )
+  else:
+    st.info("Sin registros en el historial.")
