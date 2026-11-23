@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import msal
 import pandas as pd
 import requests
@@ -167,8 +169,8 @@ except Exception as e:
   st.error(f"Error al conectar con SharePoint: {e}")
   st.stop()
 
-if df_col_raw.empty or df_mar_raw.empty:
-  st.warning("No hay registros disponibles en las listas.")
+if df_col_raw.empty:
+  st.warning("No hay colaboradores registrados en SharePoint.")
   st.stop()
 
 # 1. Procesar plantilla (dimColaboradores)
@@ -230,58 +232,84 @@ def short_name(full_name):
 df_col["Colaborador"] = df_col["NombreCompleto"].apply(short_name)
 
 # 2. Procesar marcaciones (factMarcaciones)
-m_dni = find_col(df_mar_raw, ["DNI"])
-m_tipo = find_col(df_mar_raw, ["TipoMarcacion"])
-m_fh = find_col(df_mar_raw, ["FechaHoraMarcacion", "FechaHoraMarcac"])
-m_obs = find_col(df_mar_raw, ["Observaciones"])
+if not df_mar_raw.empty:
+  m_dni = find_col(df_mar_raw, ["DNI"])
+  m_tipo = find_col(df_mar_raw, ["TipoMarcacion"])
+  m_fh = find_col(df_mar_raw, ["FechaHoraMarcacion", "FechaHoraMarcac"])
 
-df_mar = df_mar_raw[[c for c in [m_dni, m_tipo, m_fh, m_obs] if c]].copy()
-df_mar = df_mar.rename(
-    columns={
-        k: v
-        for k, v in {
-            m_dni: "DNI",
-            m_tipo: "Tipo",
-            m_fh: "FechaHora_Raw",
-            m_obs: "Obs",
-        }.items()
-        if k
-    }
-)
-df_mar["DNI"] = df_mar["DNI"].astype(str).str.strip()
+  df_mar = df_mar_raw[[c for c in [m_dni, m_tipo, m_fh] if c]].copy()
+  df_mar = df_mar.rename(
+      columns={
+          k: v
+          for k, v in {
+              m_dni: "DNI",
+              m_tipo: "Tipo",
+              m_fh: "FechaHora_Raw",
+          }.items()
+          if k
+      }
+  )
+  df_mar["DNI"] = df_mar["DNI"].astype(str).str.strip()
 
-dt = pd.to_datetime(df_mar["FechaHora_Raw"], errors="coerce", utc=True)
-df_mar["FechaHora"] = dt.dt.tz_convert("America/Lima").dt.tz_localize(None)
-df_mar = df_mar.dropna(subset=["FechaHora"]).copy()
+  dt = pd.to_datetime(df_mar["FechaHora_Raw"], errors="coerce", utc=True)
+  df_mar["FechaHora"] = dt.dt.tz_convert("America/Lima").dt.tz_localize(None)
+  df_mar = df_mar.dropna(subset=["FechaHora"]).copy()
+  df_mar["InicioSemana"] = (
+      df_mar["FechaHora"].dt.to_period("W-SUN").dt.start_time.dt.date
+  )
+  df_mar["Fecha"] = df_mar["FechaHora"].dt.date
+else:
+  df_mar = pd.DataFrame(
+      columns=["DNI", "Tipo", "FechaHora", "InicioSemana", "Fecha"]
+  )
 
-df_mar["InicioSemana"] = df_mar["FechaHora"].dt.to_period("W-SUN").dt.start_time
-df_mar["Semana"] = (
-    df_mar["InicioSemana"].dt.strftime("%d/%m")
-    + " - "
-    + (df_mar["InicioSemana"] + pd.Timedelta(days=6)).dt.strftime("%d/%m/%y")
-)
-df_mar["Fecha"] = df_mar["FechaHora"].dt.date
-df_mar["Hora"] = df_mar["FechaHora"].dt.strftime("%H:%M")
-
-# Filtrar plantilla estrictamente a quienes tienen marcaciones
+# Filtrar plantilla estrictamente a quienes tienen historial de marcaciones
 dnis_con_marcaciones = set(df_mar["DNI"].unique())
-df_col = df_col[df_col["DNI"].isin(dnis_con_marcaciones)].copy()
+if dnis_con_marcaciones:
+  df_col = df_col[df_col["DNI"].isin(dnis_con_marcaciones)].copy()
+
+# 3. Construir catálogo de semanas garantizando la semana actual de Lima como predeterminada
+hoy_lima = datetime.now(ZoneInfo("America/Lima")).date()
+lunes_actual = hoy_lima - timedelta(days=hoy_lima.weekday())
+
+inicios_semana = set(df_mar["InicioSemana"].dropna().unique())
+inicios_semana.add(lunes_actual)
+inicios_ordenados = sorted(inicios_semana, reverse=True)
+
+
+def label_semana(inicio):
+  fin = inicio + timedelta(days=6)
+  return f"{inicio.strftime('%d/%m')} - {fin.strftime('%d/%m/%y')}"
+
+
+semana_map = {label_semana(ini): ini for ini in inicios_ordenados}
+lista_semanas = list(semana_map.keys())
+idx_default = (
+    lista_semanas.index(label_semana(lunes_actual))
+    if label_semana(lunes_actual) in lista_semanas
+    else 0
+)
 
 # Filtros globales en una sola fila
-semanas_df = (
-    df_mar[["InicioSemana", "Semana"]]
-    .drop_duplicates()
-    .sort_values("InicioSemana", ascending=False)
-)
 f1, f2, f3 = st.columns([4, 4, 1], vertical_alignment="center")
 with f1:
   semana_sel = st.selectbox(
-      "Semana", semanas_df["Semana"].tolist(), label_visibility="collapsed"
+      "Semana",
+      lista_semanas,
+      index=idx_default,
+      label_visibility="collapsed",
   )
 
-df_sem_mar = df_mar[df_mar["Semana"] == semana_sel].copy()
+inicio_sem_sel = semana_map[semana_sel]
+fin_sem_sel = inicio_sem_sel + timedelta(days=6)
+
+df_sem_mar = df_mar[df_mar["InicioSemana"] == inicio_sem_sel].copy()
 dnis_semana = set(df_sem_mar["DNI"].unique())
-df_plantilla_sem = df_col[df_col["DNI"].isin(dnis_semana)].copy()
+df_plantilla_sem = (
+    df_col[df_col["DNI"].isin(dnis_semana)].copy()
+    if dnis_semana
+    else df_col.iloc[0:0].copy()
+)
 
 with f2:
   colabs_sem = ["Todos"] + sorted(
@@ -303,48 +331,57 @@ if colab_sel != "Todos":
   ]
   df_sem_mar = df_sem_mar[df_sem_mar["DNI"].isin(df_plantilla_sem["DNI"])]
 
-# Mapa rápido de régimen laboral por DNI para el cálculo diario
 regimen_map = df_col.set_index("DNI")["Régimen"].to_dict()
 meta_map = df_col.set_index("DNI")["Meta"].to_dict()
 
-# 3. Cálculo diario de jornadas (Escenario A: descuenta 1.0h de refrigerio a Full Time en turnos continuos > 5h)
-registros_diarios = []
-for (dni, fecha), grupo in df_sem_mar.sort_values("FechaHora").groupby(
-    ["DNI", "Fecha"]
-):
-  ingresos = grupo[grupo["Tipo"].str.lower() == "ingreso"]["FechaHora"].tolist()
-  salidas = grupo[grupo["Tipo"].str.lower() == "salida"]["FechaHora"].tolist()
 
-  horas_brutas = 0.0
-  pares_validos = min(len(ingresos), len(salidas))
-  for i in range(pares_validos):
-    diff = (salidas[i] - ingresos[i]).total_seconds() / 3600.0
-    if diff > 0:
-      horas_brutas += diff
+# Función reutilizable de cálculo diario (Escenario A: descuenta 1.0h refrigerio a Full Time > 5h)
+def calcular_jornadas(df_marcaciones_sub):
+  if df_marcaciones_sub.empty:
+    return pd.DataFrame(
+        columns=["DNI", "Fecha", "In", "Out", "Ref", "Hrs", "Pend"]
+    )
+  registros = []
+  for (dni, fecha), grupo in df_marcaciones_sub.sort_values(
+      "FechaHora"
+  ).groupby(["DNI", "Fecha"]):
+    ingresos = grupo[grupo["Tipo"].str.lower() == "ingreso"][
+        "FechaHora"
+    ].tolist()
+    salidas = grupo[grupo["Tipo"].str.lower() == "salida"]["FechaHora"].tolist()
 
-  regimen_actual = str(regimen_map.get(dni, "")).lower()
-  es_full_time = ("full" in regimen_actual) or (meta_map.get(dni, 0) >= 40)
+    horas_brutas = 0.0
+    pares_validos = min(len(ingresos), len(salidas))
+    for i in range(pares_validos):
+      diff = (salidas[i] - ingresos[i]).total_seconds() / 3600.0
+      if diff > 0:
+        horas_brutas += diff
 
-  descuento_refrigerio = 0.0
-  if es_full_time and pares_validos == 1 and horas_brutas > 5.0:
-    descuento_refrigerio = 1.0
+    regimen_actual = str(regimen_map.get(dni, "")).lower()
+    es_full_time = ("full" in regimen_actual) or (meta_map.get(dni, 0) >= 40)
 
-  horas_netas = max(0.0, horas_brutas - descuento_refrigerio)
-  incompleto = not (len(ingresos) == len(salidas) and len(ingresos) > 0)
+    descuento_refrigerio = 0.0
+    if es_full_time and pares_validos == 1 and horas_brutas > 5.0:
+      descuento_refrigerio = 1.0
 
-  registros_diarios.append({
-      "DNI": dni,
-      "Fecha": fecha,
-      "In": ingresos[0].strftime("%H:%M") if ingresos else "--:--",
-      "Out": salidas[-1].strftime("%H:%M") if salidas else "--:--",
-      "Ref": "-1h" if descuento_refrigerio > 0 else "—",
-      "Hrs": round(horas_netas, 2),
-      "Pend": 1 if incompleto else 0,
-  })
+    horas_netas = max(0.0, horas_brutas - descuento_refrigerio)
+    incompleto = not (len(ingresos) == len(salidas) and len(ingresos) > 0)
 
-df_diario = pd.DataFrame(registros_diarios)
+    registros.append({
+        "DNI": dni,
+        "Fecha": fecha,
+        "In": ingresos[0].strftime("%H:%M") if ingresos else "--:--",
+        "Out": salidas[-1].strftime("%H:%M") if salidas else "--:--",
+        "Ref": "-1h" if descuento_refrigerio > 0 else "—",
+        "Hrs": round(horas_netas, 2),
+        "Pend": 1 if incompleto else 0,
+    })
+  return pd.DataFrame(registros)
 
-# 4. Consolidar Balance Semanal únicamente sobre colaboradores con marcaciones en la semana
+
+df_diario = calcular_jornadas(df_sem_mar)
+
+# Consolidar Balance Semanal
 if not df_diario.empty:
   agg_sem = df_diario.groupby("DNI", as_index=False).agg(
       Días=("Fecha", "nunique"),
@@ -372,12 +409,6 @@ df_resumen["Sin_Salida"] = df_resumen["Sin_Salida"].fillna(0).astype(int)
 df_resumen["Diferencia"] = (df_resumen["Trabajadas"] - df_resumen["Meta"]).round(
     2
 )
-df_resumen["Regulares"] = df_resumen.apply(
-    lambda r: min(r["Trabajadas"], r["Meta"])
-    if r["Meta"] > 0
-    else r["Trabajadas"],
-    axis=1,
-).round(2)
 df_resumen["Extra"] = df_resumen["Diferencia"].apply(lambda x: max(0.0, x))
 df_resumen["Faltante"] = df_resumen["Diferencia"].apply(lambda x: max(0.0, -x))
 
@@ -394,7 +425,7 @@ def format_balance(row):
 
 df_resumen["Balance"] = df_resumen.apply(format_balance, axis=1)
 
-# 5. Pestañas principales: Asistencia vs. Planilla
+# 4. Pestañas principales: Asistencia vs. Planilla
 tab_asistencia, tab_planilla = st.tabs(
     ["Control Asistencia", "Planilla Semanal"]
 )
@@ -428,7 +459,7 @@ with tab_asistencia:
           " (horas parciales)."
       )
   else:
-    st.info("No hay marcaciones registradas para los filtros seleccionados.")
+    st.info(f"Aún no hay marcaciones registradas en la semana ({semana_sel}).")
 
   with st.expander("Ver detalle diario de turnos"):
     if not df_diario.empty:
@@ -453,26 +484,65 @@ with tab_asistencia:
           hide_index=True,
       )
     else:
-      st.info("Sin turnos registrados.")
-
-  with st.expander("Historial crudo de marcaciones"):
-    if not df_sem_mar.empty:
-      df_log = df_sem_mar.merge(
-          df_col[["DNI", "Colaborador"]], on="DNI", how="left"
-      )
-      cols = ["Fecha", "Hora", "Colaborador", "Tipo"]
-      if "Obs" in df_log.columns:
-        cols.append("Obs")
-      st.dataframe(
-          df_log.sort_values("FechaHora", ascending=False)[cols],
-          use_container_width=True,
-          hide_index=True,
-      )
+      st.info("Sin turnos registrados en este periodo.")
 
 with tab_planilla:
-  if df_resumen.empty:
-    st.info("No hay colaboradores con marcaciones en esta semana para liquidar.")
+  # Segmentador de fechas propio para cálculo de planilla (sincronizado con la semana elegida por defecto)
+  rango_fechas = st.date_input(
+      "Rango de fechas para cálculo de planilla",
+      value=(inicio_sem_sel, fin_sem_sel),
+      format="DD/MM/YYYY",
+      key=f"rango_planilla_{semana_sel}",
+  )
+
+  if isinstance(rango_fechas, tuple) and len(rango_fechas) == 2:
+    f_inicio, f_fin = rango_fechas
+  elif isinstance(rango_fechas, tuple) and len(rango_fechas) == 1:
+    f_inicio = f_fin = rango_fechas[0]
   else:
+    f_inicio = f_fin = rango_fechas
+
+  df_mar_plan = df_mar[
+      (df_mar["Fecha"] >= f_inicio) & (df_mar["Fecha"] <= f_fin)
+  ].copy()
+  if colab_sel != "Todos":
+    dnis_filtro = df_col[df_col["Colaborador"] == colab_sel]["DNI"].tolist()
+    df_mar_plan = df_mar_plan[df_mar_plan["DNI"].isin(dnis_filtro)]
+
+  df_diario_plan = calcular_jornadas(df_mar_plan)
+
+  if df_diario_plan.empty:
+    st.info(
+        "No hay marcaciones registradas entre el"
+        f" {f_inicio.strftime('%d/%m/%Y')} y el {f_fin.strftime('%d/%m/%Y')}."
+    )
+  else:
+    # Escalar meta proporcionalmente si el rango abarca más o menos de 7 días
+    dias_rango = max(1, (f_fin - f_inicio).days + 1)
+    factor_semanas = dias_rango / 7.0
+
+    agg_plan = df_diario_plan.groupby("DNI", as_index=False).agg(
+        Días=("Fecha", "nunique"),
+        Trabajadas=("Hrs", "sum"),
+        Sin_Salida=("Pend", "sum"),
+    )
+    df_plan_base = df_col.merge(agg_plan, on="DNI", how="inner")
+    df_plan_base["MetaPeriodo"] = (
+        df_plan_base["Meta"] * factor_semanas
+    ).round(2)
+    df_plan_base["Regulares"] = df_plan_base.apply(
+        lambda r: min(r["Trabajadas"], r["MetaPeriodo"])
+        if r["MetaPeriodo"] > 0
+        else r["Trabajadas"],
+        axis=1,
+    ).round(2)
+    df_plan_base["Extra"] = df_plan_base.apply(
+        lambda r: max(0.0, r["Trabajadas"] - r["MetaPeriodo"])
+        if r["MetaPeriodo"] > 0
+        else 0.0,
+        axis=1,
+    ).round(2)
+
     p1, p2 = st.columns(2)
     with p1:
       tarifa_default = st.number_input(
@@ -481,10 +551,7 @@ with tab_planilla:
           value=7.50,
           step=0.50,
           format="%.2f",
-          help=(
-              "Se aplica a quienes no tengan tarifa definida en SharePoint."
-              " Puedes editar cada fila abajo."
-          ),
+          help="Se aplica si no hay tarifa definida en SharePoint.",
       )
     with p2:
       factor_he = st.number_input(
@@ -495,7 +562,7 @@ with tab_planilla:
           format="%.2f",
       )
 
-    df_calc = df_resumen.sort_values("Colaborador")[
+    df_calc = df_plan_base.sort_values("Colaborador")[
         [
             "DNI",
             "Colaborador",
@@ -511,10 +578,7 @@ with tab_planilla:
         lambda x: float(x) if x > 0 else float(tarifa_default)
     )
 
-    st.caption(
-        "Edita **S/ Hora** directamente en la tabla si cada colaborador tiene"
-        " tarifa distinta:"
-    )
+    st.caption("Edita **S/ Hora** en la tabla para ajustar tarifas:")
     df_editado = st.data_editor(
         df_calc[["Colaborador", "Días", "Regulares", "Extra", "S/ Hora"]],
         column_config={
@@ -532,7 +596,7 @@ with tab_planilla:
         },
         use_container_width=True,
         hide_index=True,
-        key=f"editor_planilla_{semana_sel}_{colab_sel}",
+        key=f"editor_planilla_{f_inicio}_{f_fin}_{colab_sel}",
     )
 
     df_calc["S/ Hora"] = df_editado["S/ Hora"].fillna(0.0)
@@ -551,7 +615,7 @@ with tab_planilla:
     m2.metric("Pago H. Extra", f"S/ {df_calc['Pago Extra'].sum():,.2f}")
     m3.metric("Total Planilla", f"S/ {df_calc['Total S/'].sum():,.2f}")
 
-    st.subheader("Liquidación Semanal")
+    st.subheader("Liquidación del Periodo")
     tabla_pago = df_calc[
         [
             "Colaborador",
@@ -582,7 +646,7 @@ with tab_planilla:
 
     if df_calc["Sin_Salida"].sum() > 0:
       st.warning(
-          "Hay marcaciones sin salida registrada en esta semana; verifica los"
+          "Hay marcaciones sin salida registrada en este rango; verifica los"
           " turnos antes de cerrar el pago."
       )
 
@@ -600,9 +664,9 @@ with tab_planilla:
     ]].to_csv(index=False)
 
     st.download_button(
-        label="Descargar Planilla Semanal (CSV)",
+        label="Descargar Planilla (CSV)",
         data=csv_export.encode("utf-8-sig"),
-        file_name=f"planilla_kco_{semana_sel.replace('/', '-').replace(' ', '')}.csv",
+        file_name=f"planilla_kco_{f_inicio.strftime('%Y%m%d')}_{f_fin.strftime('%Y%m%d')}.csv",
         mime="text/csv",
         use_container_width=True,
     )
